@@ -156,7 +156,7 @@ log "Screenshot captured."
 
 # ─── 7. Copy to clipboard ─────────────────────────────────────────────────────
 if $DO_COPY; then
-    wl-copy < "$FILENAME"
+    cat "$FILENAME" | wl-copy
     log "Copied to clipboard."
 fi
 
@@ -188,7 +188,8 @@ if $NOTIFY; then
 
     if $DO_SAVE && [ "$ACTION" = "default" ]; then
       log "Opening $SCREENSHOT_DIR in $FILE_EXPLORER"
-      $FILE_EXPLORER -w "$SCREENSHOT_DIR" &
+      # Detach file explorer from original script process
+      setsid "$FILE_EXPLORER" -w "$SCREENSHOT_DIR" > /dev/null 2>&1 &
     fi
 fi
 
