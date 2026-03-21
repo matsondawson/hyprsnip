@@ -5,6 +5,7 @@ FILE_EXPLORER="nautilus"
 SCREENSHOT_DIR="$HOME/Pictures/screenshots"
 NOTIFY=true
 VERBOSE=false
+AREA_MODE="select"
 DATEFORMAT="+%Y-%m-%dT%H:%M:%S"
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
@@ -20,19 +21,24 @@ Modes:
   save        Save to disk only
 
 Options:
-  -d, --dir DIR          Directory to save screenshots (default: ~/Pictures/screenshots)
+  -o, --output DIR       Directory to save screenshots (default: ~/Pictures/screenshots)
                          (only relevant for 'copysave' and 'save' modes)
-  -f, --date-format      File date prefix format. (default: ${DATEFORMAT})
-  -e, --explorer APP     File explorer to open on notification click (default: nautilus)
-  -n, --no-notify        Suppress the desktop notification
-  -v, --verbose          Print extra info during execution
-  -h, --help             Show this help message and exit
+  -df, --date-format     File date prefix format. (default: ${DATEFORMAT})
+  -e,  --explorer APP    File explorer to open on notification click (default: nautilus)
+  -a,  --area            select - Select an area (default)
+                         active - Active window
+                         screen - Whole screen
+  -nn, --no-notify       Suppress the desktop notification
+  -v,  --verbose         Print extra info during execution
+  -h,  --help            Show this help message and exit
 
 Examples:
   $(basename "$0") copy
-  $(basename "$0") save --dir ~/Desktop/shots
+  $(basename "$0") save --output ~/Desktop/shots
   $(basename "$0") copysave --explorer thunar --verbose
   $(basename "$0") save --no-notify
+  $(basename "$0") copysave --area active
+  $(basename "$0") copysave --area screen
 EOF
 }
 
@@ -71,11 +77,11 @@ esac
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -d|--dir)
+        -o|--output)
             SCREENSHOT_DIR="$2"
             shift 2
             ;;
-        -f|--date-format)
+        -df|--date-format)
             DATEFORMAT="$2"
             shift 2
             ;;
@@ -83,7 +89,18 @@ while [[ $# -gt 0 ]]; do
             FILE_EXPLORER="$2"
             shift 2
             ;;
-        -n|--no-notify)
+        -a|--area)
+            case "$2" in
+                select|active|screen) AREA_MODE="$2" ;;
+                *)
+                    echo "Error: invalid area mode '$2'. Must be one of: select, active, screen." >&2
+                    echo "Run '$(basename "$0") --help' for usage." >&2
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
+        -nn|--no-notify)
             NOTIFY=false
             shift
             ;;
@@ -100,18 +117,43 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
-log() { $VERBOSE && echo "[INFO] $*"; }
+log() {
+  $VERBOSE && echo "[INFO] $*";
+}
+
+err() {
+  echo "[ERROR] $*" >&2;
+  notify-send "Screenshot Error" "$*" -i dialog-error --hint=int:transient:1;
+  exit 1;
+}
 
 # ─── Ensure output directory exists (only when saving) ───────────────────────
 if $DO_SAVE; then
-    mkdir -p "$SCREENSHOT_DIR" || { echo "Failed to create directory: $SCREENSHOT_DIR" >&2; exit 1; }
+    mkdir -p "$SCREENSHOT_DIR" || err "Failed to create directory: $SCREENSHOT_DIR";
 fi
 
 # ─── 1. Area selection ────────────────────────────────────────────────────────
-log "Waiting for area selection..."
-AREA=$(slurp)
-[ -z "$AREA" ] && { log "Selection cancelled."; exit 1; }
-log "Selected area: $AREA"
+case "$AREA_MODE" in
+    select)
+        log "Waiting for area selection..."
+        AREA=$(slurp)
+        [ -z "$AREA" ] && { log "Selection cancelled."; exit 1; }
+        log "Selected area: $AREA"
+        ;;
+    active)
+        log "Capturing active window..."
+        WINDOW_JSON=$(hyprctl activewindow -j)
+        AREA=$(echo "$WINDOW_JSON" | jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')
+        [ -z "$AREA" ] && err "Could not determine active window geometry."
+        log "Active window area: $AREA"
+        ;;
+    screen)
+        log "Capturing active monitor..."
+        AREA=$(hyprctl monitors -j | jq -r '.[] | select(.focused == true) | "\(.x),\(.y) \(.width)x\(.height)"')
+        [ -z "$AREA" ] && err "Could not determine active monitor geometry."
+        log "Active monitor area: $AREA"
+        ;;
+esac
 
 # ─── 2. Active workspace ──────────────────────────────────────────────────────
 WS_ID=$(hyprctl activeworkspace -j | jq '.id')
@@ -128,16 +170,26 @@ CENTER_Y=$((Y + H/2))
 log "Center point: ${CENTER_X},${CENTER_Y}"
 
 # ─── 4. Detect window under selection ────────────────────────────────────────
-WINDOW_TITLE=$(hyprctl clients -j | jq -r ".[] |
-    select(.workspace.id == $WS_ID and .hidden == false and .mapped == true and
-           .at[0] <= $CENTER_X and .at[0] + .size[0] >= $CENTER_X and
-           .at[1] <= $CENTER_Y and .at[1] + .size[1] >= $CENTER_Y) | .title" | head -n 1)
+WINDOW_INFO=$(hyprctl clients -j | jq -r "
+    [.[] | select(
+        .workspace.id == $WS_ID and
+        .hidden == false and
+        .mapped == true and
+        .at[0] <= $CENTER_X and .at[0] + .size[0] >= $CENTER_X and
+        .at[1] <= $CENTER_Y and .at[1] + .size[1] >= $CENTER_Y
+    )] |
+    sort_by(if .floating then 0 else 1 end) |
+    .[0] | \"\(.at[0]) \(.at[1]) \(.size[0]) \(.size[1]) \(.title)\"")
+
+# shellcheck disable=SC2034
+read -r WIN_X WIN_Y WIN_W WIN_H WINDOW_TITLE <<< "$WINDOW_INFO"
 
 [ -z "$WINDOW_TITLE" ] && WINDOW_TITLE="Desktop"
 log "Window title: $WINDOW_TITLE"
 
 # ─── 5. Build filename ────────────────────────────────────────────────────────
-ISO_DATE=$(date "$DATEFORMAT" | tr ':' '-')
+# Get date and convert :'s in time to -'s as : aren't valid in filenames
+ISO_DATE=$(date "$DATEFORMAT" | tr ':/<>\\|?* ' '-')
 CLEAN_NAME=$(echo "$WINDOW_TITLE" | tr -dc '[:alnum:]\n\r ' | tr ' ' '_')
 
 if $DO_SAVE; then
@@ -151,7 +203,7 @@ fi
 log "Output file: $FILENAME"
 
 # ─── 6. Capture ───────────────────────────────────────────────────────────────
-grim -g "$AREA" "$FILENAME" || { echo "grim failed to capture screenshot." >&2; exit 1; }
+grim -g "$AREA" "$FILENAME" || err "grim failed to capture screenshot."
 log "Screenshot captured."
 
 # ─── 7. Copy to clipboard ─────────────────────────────────────────────────────
@@ -170,27 +222,24 @@ fi
 if $NOTIFY; then
     log "Notifying"
 
-    MESSAGE="Screenshot saved to:"
-    if $DO_COPY && $DO_SAVE; then
-      MESSAGE="Screenshot copied & saved to:"
-    fi
-
-    ACTION=""
     if $DO_SAVE; then
-      ACTION=$(notify-send "$MESSAGE" "${SUBFILENAME:0:48}" \
+      MESSAGE="Screenshot saved to:"
+      if $DO_COPY && $DO_SAVE; then
+        MESSAGE="Screenshot copied & saved to:"
+      fi
+
+      ACTION_RESULT=$(notify-send "$MESSAGE" "${SUBFILENAME:0:48}" \
           -i "${FILENAME:-utilities-screenshot}" \
           --action="default=Open Folder" \
           --hint=int:transient:1
           )
     else
-      ACTION=$(notify-send "Screenshot Copied")
+      ACTION_RESULT=$(notify-send "Screenshot Copied")
     fi
 
-    if $DO_SAVE && [ "$ACTION" = "default" ]; then
+    if $DO_SAVE && [ "$ACTION_RESULT" = "default" ]; then
       log "Opening $SCREENSHOT_DIR in $FILE_EXPLORER"
       # Detach file explorer from original script process
       setsid "$FILE_EXPLORER" -w "$SCREENSHOT_DIR" > /dev/null 2>&1 &
     fi
 fi
-
-exit 0

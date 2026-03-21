@@ -54,21 +54,26 @@ Modes:
   save        Save to disk only
 
 Options:
-  -d, --dir DIR          Directory to save screenshots (default: ~/Pictures/screenshots)
-  -f, --date-format FMT  Date prefix format (default: +%Y-%m-%dT%H:%M:%S)
-  -e, --explorer APP     File explorer for notification click (default: nautilus)
-  -n, --no-notify        Suppress the desktop notification
-  -v, --verbose          Print extra info during execution
-  -h, --help             Show help and exit
+  -o, --output DIR       Directory to save screenshots (default: ~/Pictures/screenshots)
+  -df, --date-format FMT Date prefix format (default: +%Y-%m-%dT%H:%M:%S)
+  -e,  --explorer APP    File explorer for notification click (default: nautilus)
+  -a,  --area            select - Select an area (default)
+                         active - Active window
+                         screen - Whole screen
+  -nn, --no-notify       Suppress the desktop notification
+  -v,  --verbose         Print extra info during execution
+  -h,  --help            Show help and exit
 ```
 
 ### Examples
 
 ```bash
 hyprgrab copy
-hyprgrab save --dir ~/Desktop/shots
+hyprgrab save --output ~/Desktop/shots
 hyprgrab copysave --explorer thunar --verbose
 hyprgrab save --no-notify
+hyprgrab copysave --area active
+hyprgrab copysave --area screen
 ```
 
 ### Hyprland keybind
@@ -81,7 +86,7 @@ bind = , Print, exec, ~/.local/bin/hyprgrab copysave
 
 ## How It Works
 
-1. `slurp` opens a crosshair — click and drag to select a region.
+1. The capture area is determined by `--area`: `select` (default) opens a `slurp` crosshair to drag a region; `active` captures the focused window's geometry via `hyprctl activewindow`; `screen` captures the entire focused monitor via `hyprctl monitors`.
 2. `hyprctl activeworkspace` gets the current workspace ID.
 3. `hyprctl clients` is queried to find the window whose bounding box contains the centre point of the selection. Its title becomes part of the filename.
 4. `grim` captures the selected region.
