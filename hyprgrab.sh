@@ -234,7 +234,7 @@ if $NOTIFY; then
           --hint=int:transient:1
           )
     else
-      ACTION_RESULT=$(notify-send "Screenshot Copied")
+      ACTION_RESULT=$(notify-send "Screenshot copied")
     fi
 
     if $DO_SAVE && [ "$ACTION_RESULT" = "default" ]; then
