@@ -26,6 +26,8 @@ If you click the notification the screenshots directory will open.
 
 Install on Arch-based systems:
 
+If you already have [ml4w](https://github.com/mylinuxforwork/dotfiles) installed you won't need to install these.
+
 ```bash
 sudo pacman -S slurp grim wl-clipboard jq libnotify nautilus
 ```
@@ -82,7 +84,9 @@ hyprgrab copysave --area screen
 Add to `~/.config/hypr/hyprland.conf`:
 
 ```ini
-bind = , Print, exec, ~/.local/bin/hyprgrab copysave
+bind = , PRINT, exec, ~/.local/bin/hyprgrab copysave                           # Copy area to clipboard and also save to screen shots
+bind = $mainMod, PRINT, exec, ~/.local/bin/hyprgrab copysave -a active         # Copy active window to clipboard and also save to screen shots
+bind = $mainMod SHIFT, PRINT, exec, ~/.local/bin/hyprgrab copysave -a screen   # Copy active workspace to clipboard and also save to screen shots
 ```
 
 ## How It Works
