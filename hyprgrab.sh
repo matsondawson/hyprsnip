@@ -180,22 +180,19 @@ if [[ "$AREA_MODE" == "select" ]]; then
   CENTER_Y=$((Y + H/2))
   log "Center point: ${CENTER_X},${CENTER_Y}"
 
-  WINDOW_INFO=$(hyprctl clients -j | jq -r "
-      [.[] | select(
-          .workspace.id == $WS_ID and
-          .hidden == false and
-          .mapped == true and
-          .at[0] <= $CENTER_X and .at[0] + .size[0] >= $CENTER_X and
-          .at[1] <= $CENTER_Y and .at[1] + .size[1] >= $CENTER_Y
-      )] |
-      sort_by(if .floating then 0 else 1 end) |
-      .[0] | \"\(.title)\"")
-
-  # shellcheck disable=SC2034
-  read -r WINDOW_TITLE <<< "$WINDOW_INFO"
+  WINDOW_TITLE=$(hyprctl clients -j | jq -r "
+    [.[] | select(
+        .workspace.id == $WS_ID and
+        .hidden == false and
+        .mapped == true and
+        .at[0] <= $CENTER_X and .at[0] + .size[0] >= $CENTER_X and
+        .at[1] <= $CENTER_Y and .at[1] + .size[1] >= $CENTER_Y
+    )] |
+    sort_by(if .floating then 0 else 1 end) |
+    .[0].title")
 fi
 
-[ -z "$WINDOW_TITLE" ] && WINDOW_TITLE="Desktop"
+[[ "$WINDOW_TITLE" == "null" || -z "$WINDOW_TITLE" ]] && WINDOW_TITLE="Desktop"
 log "Window title: $WINDOW_TITLE"
 
 # ─── Build filename ────────────────────────────────────────────────────────
@@ -213,6 +210,9 @@ else
 fi
 log "Output file: $FILENAME"
 
+# ─── Clean up temp file (copy-only mode) ──────────────────────────────────────
+trap '[[ -n "$TMPFILE" ]] && rm -f "$TMPFILE"' EXIT
+
 # ─── Capture ───────────────────────────────────────────────────────────────
 grim -g "$AREA" "$FILENAME" || err "grim failed to capture screenshot."
 log "Screenshot captured."
@@ -221,12 +221,6 @@ log "Screenshot captured."
 if $DO_COPY; then
     cat "$FILENAME" | wl-copy
     log "Copied to clipboard."
-fi
-
-# ─── Clean up temp file (copy-only mode) ──────────────────────────────────────
-if [[ -n "$TMPFILE" ]]; then
-    rm -f "$TMPFILE"
-    log "Temp file removed."
 fi
 
 # ─── Notification ──────────────────────────────────────────────────────────
@@ -245,12 +239,12 @@ if $NOTIFY; then
           --hint=int:transient:1
           )
     else
-      ACTION_RESULT=$(notify-send "Screenshot copied")
+      ACTION_RESULT=$(notify-send "Screenshot copied" --hint=int:transient:1)
     fi
 
     if $DO_SAVE && [ "$ACTION_RESULT" = "default" ]; then
       log "Opening $SCREENSHOT_DIR in $FILE_EXPLORER"
       # Detach file explorer from original script process
-      setsid "$FILE_EXPLORER" -w "$SCREENSHOT_DIR" > /dev/null 2>&1 &
+      setsid "$FILE_EXPLORER" "$SCREENSHOT_DIR" > /dev/null 2>&1 &
     fi
 fi
