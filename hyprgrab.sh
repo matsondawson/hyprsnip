@@ -132,7 +132,10 @@ if $DO_SAVE; then
     mkdir -p "$SCREENSHOT_DIR" || err "Failed to create directory: $SCREENSHOT_DIR";
 fi
 
-# ─── 1. Area selection ────────────────────────────────────────────────────────
+WS_ID=$(hyprctl activeworkspace -j | jq '.id')
+log "Workspace ID: $WS_ID"
+
+# ─── Area selection ────────────────────────────────────────────────────────
 case "$AREA_MODE" in
     select)
         log "Waiting for area selection..."
@@ -143,54 +146,62 @@ case "$AREA_MODE" in
     active)
         log "Capturing active window..."
         WINDOW_JSON=$(hyprctl activewindow -j)
+        WINDOW_TITLE=$(echo "$WINDOW_JSON" | jq -r '.title')
         AREA=$(echo "$WINDOW_JSON" | jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')
         [ -z "$AREA" ] && err "Could not determine active window geometry."
         log "Active window area: $AREA"
         ;;
     screen)
-        log "Capturing active monitor..."
+        log "Capturing active workspace..."
         AREA=$(hyprctl monitors -j | jq -r '.[] | select(.focused == true) | "\(.x),\(.y) \(.width)x\(.height)"')
         [ -z "$AREA" ] && err "Could not determine active monitor geometry."
         log "Active monitor area: $AREA"
+        WORKSPACE_WINDOWS=$(hyprctl clients -j | jq -r "[.[] | select(.workspace.id == $WS_ID and .hidden == false and .mapped == true)]")
+        WINDOW_COUNT=$(echo "$WORKSPACE_WINDOWS" | jq 'length')
+        if [[ "$WINDOW_COUNT" -eq 1 ]]; then
+            WINDOW_TITLE=$(echo "$WORKSPACE_WINDOWS" | jq -r '.[0].title')
+            log "Single window on workspace, using title: $WINDOW_TITLE"
+        else
+            WINDOW_TITLE="workspace_${WS_ID}"
+            log "Multiple windows on workspace ($WINDOW_COUNT), using: $WINDOW_TITLE"
+        fi
         ;;
 esac
 
-# ─── 2. Active workspace ──────────────────────────────────────────────────────
-WS_ID=$(hyprctl activeworkspace -j | jq '.id')
-log "Workspace ID: $WS_ID"
+# ─── Detect window under selection ────────────────────────────────────────
+if [[ "$AREA_MODE" == "select" ]]; then
+  # Parse coordinates
+  X=$(echo "$AREA" | cut -d',' -f1)
+  Y=$(echo "$AREA" | cut -d',' -f2 | cut -d' ' -f1)
+  W=$(echo "$AREA" | cut -d' ' -f2 | cut -d'x' -f1)
+  H=$(echo "$AREA" | cut -d' ' -f2 | cut -d'x' -f2)
 
-# ─── 3. Parse coordinates ─────────────────────────────────────────────────────
-X=$(echo "$AREA" | cut -d',' -f1)
-Y=$(echo "$AREA" | cut -d',' -f2 | cut -d' ' -f1)
-W=$(echo "$AREA" | cut -d' ' -f2 | cut -d'x' -f1)
-H=$(echo "$AREA" | cut -d' ' -f2 | cut -d'x' -f2)
+  CENTER_X=$((X + W/2))
+  CENTER_Y=$((Y + H/2))
+  log "Center point: ${CENTER_X},${CENTER_Y}"
 
-CENTER_X=$((X + W/2))
-CENTER_Y=$((Y + H/2))
-log "Center point: ${CENTER_X},${CENTER_Y}"
+  WINDOW_INFO=$(hyprctl clients -j | jq -r "
+      [.[] | select(
+          .workspace.id == $WS_ID and
+          .hidden == false and
+          .mapped == true and
+          .at[0] <= $CENTER_X and .at[0] + .size[0] >= $CENTER_X and
+          .at[1] <= $CENTER_Y and .at[1] + .size[1] >= $CENTER_Y
+      )] |
+      sort_by(if .floating then 0 else 1 end) |
+      .[0] | \"\(.title)\"")
 
-# ─── 4. Detect window under selection ────────────────────────────────────────
-WINDOW_INFO=$(hyprctl clients -j | jq -r "
-    [.[] | select(
-        .workspace.id == $WS_ID and
-        .hidden == false and
-        .mapped == true and
-        .at[0] <= $CENTER_X and .at[0] + .size[0] >= $CENTER_X and
-        .at[1] <= $CENTER_Y and .at[1] + .size[1] >= $CENTER_Y
-    )] |
-    sort_by(if .floating then 0 else 1 end) |
-    .[0] | \"\(.at[0]) \(.at[1]) \(.size[0]) \(.size[1]) \(.title)\"")
-
-# shellcheck disable=SC2034
-read -r WIN_X WIN_Y WIN_W WIN_H WINDOW_TITLE <<< "$WINDOW_INFO"
+  # shellcheck disable=SC2034
+  read -r WINDOW_TITLE <<< "$WINDOW_INFO"
+fi
 
 [ -z "$WINDOW_TITLE" ] && WINDOW_TITLE="Desktop"
 log "Window title: $WINDOW_TITLE"
 
-# ─── 5. Build filename ────────────────────────────────────────────────────────
+# ─── Build filename ────────────────────────────────────────────────────────
 # Get date and convert :'s in time to -'s as : aren't valid in filenames
 ISO_DATE=$(date "$DATEFORMAT" | tr ':/<>\\|?* ' '-')
-CLEAN_NAME=$(echo "$WINDOW_TITLE" | tr -dc '[:alnum:]\n\r ' | tr ' ' '_')
+CLEAN_NAME=$(echo "$WINDOW_TITLE" | tr -dc '[:alnum:]_\n\r ' | tr ' ' '_')
 
 if $DO_SAVE; then
     SUBFILENAME="screenshot_${ISO_DATE}_${CLEAN_NAME}.png"
@@ -202,11 +213,11 @@ else
 fi
 log "Output file: $FILENAME"
 
-# ─── 6. Capture ───────────────────────────────────────────────────────────────
+# ─── Capture ───────────────────────────────────────────────────────────────
 grim -g "$AREA" "$FILENAME" || err "grim failed to capture screenshot."
 log "Screenshot captured."
 
-# ─── 7. Copy to clipboard ─────────────────────────────────────────────────────
+# ─── Copy to clipboard ─────────────────────────────────────────────────────
 if $DO_COPY; then
     cat "$FILENAME" | wl-copy
     log "Copied to clipboard."
@@ -218,7 +229,7 @@ if [[ -n "$TMPFILE" ]]; then
     log "Temp file removed."
 fi
 
-# ─── 8. Notification ──────────────────────────────────────────────────────────
+# ─── Notification ──────────────────────────────────────────────────────────
 if $NOTIFY; then
     log "Notifying"
 
