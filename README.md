@@ -1,4 +1,4 @@
-# hyprgrab
+# hyprsnip
 
 A Bash script for context-aware screenshots on the **awesome** [Hyprland](https://hyprland.org/).<br>
 Select any screen region and the screenshot is automatically named after the window it captured — then saved, copied to clipboard, or both, with an interactive desktop notification.<br>
