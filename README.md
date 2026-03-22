@@ -36,21 +36,21 @@ sudo pacman -S slurp grim wl-clipboard jq libnotify nautilus
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/hyprgrab.git
-cd hyprgrab
-chmod +x hyprgrab.sh
+git clone https://github.com/your-username/hyprsnip.git
+cd hyprsnip
+chmod +x hyprsnip.sh
 ```
 
 Optionally, add it to your `$PATH`:
 
 ```bash
-cp hyprgrab.sh ~/.local/bin/hyprgrab
+cp hyprsnip.sh ~/.local/bin/hyprsnip
 ```
 
 ## Usage
 
 ```
-hyprgrab <mode> [OPTIONS]
+hyprsnip <mode> [OPTIONS]
 
 Modes:
   copy        Copy screenshot to clipboard only
@@ -72,12 +72,12 @@ Options:
 ### Examples
 
 ```bash
-hyprgrab copy
-hyprgrab save --output ~/Desktop/shots
-hyprgrab copysave --explorer thunar --verbose
-hyprgrab save --no-notify
-hyprgrab copysave --area active
-hyprgrab copysave --area screen
+hyprsnip copy
+hyprsnip save --output ~/Desktop/shots
+hyprsnip copysave --explorer thunar --verbose
+hyprsnip save --no-notify
+hyprsnip copysave --area active
+hyprsnip copysave --area screen
 ```
 
 ### Hyprland keybind
@@ -85,9 +85,9 @@ hyprgrab copysave --area screen
 Add to `~/.config/hypr/hyprland.conf`:
 
 ```ini
-bind = , PRINT, exec, ~/.local/bin/hyprgrab copysave                           # Copy area to clipboard and also save to screen shots
-bind = $mainMod, PRINT, exec, ~/.local/bin/hyprgrab copysave -a active         # Copy active window to clipboard and also save to screen shots
-bind = $mainMod SHIFT, PRINT, exec, ~/.local/bin/hyprgrab copysave -a screen   # Copy active workspace to clipboard and also save to screen shots
+bind = , PRINT, exec, ~/.local/bin/hyprsnip copysave                           # Copy area to clipboard and also save to screen shots
+bind = $mainMod, PRINT, exec, ~/.local/bin/hyprsnip copysave -a active         # Copy active window to clipboard and also save to screen shots
+bind = $mainMod SHIFT, PRINT, exec, ~/.local/bin/hyprsnip copysave -a screen   # Copy active workspace to clipboard and also save to screen shots
 ```
 
 ## How It Works
