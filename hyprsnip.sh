@@ -7,6 +7,7 @@ NOTIFY=true
 VERBOSE=false
 AREA_MODE="select"
 DATEFORMAT="+%Y-%m-%dT%H:%M:%S"
+TEXT_FORMAT=""  # text | html | markup
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 usage() {
@@ -28,6 +29,13 @@ Options:
   -a,  --area            select - Select an area (default)
                          active - Active window
                          screen - Whole screen
+  -t,  --text FORMAT     Send image to Claude and convert to text. FORMAT must be:
+                           text   - plain text extraction         → .txt
+                           html   - convert to HTML               → .html
+                           markup - convert to Markdown           → .md
+                         Saves/copies the text output instead of the image.
+                         Filename becomes screenshot_data_{date}_{derived_name}.{ext}
+                         Requires ANTHROPIC_API_KEY to be set.
   -nn, --no-notify       Suppress the desktop notification
   -v,  --verbose         Print extra info during execution
   -h,  --help            Show this help message and exit
@@ -94,6 +102,17 @@ while [[ $# -gt 0 ]]; do
                 select|active|screen) AREA_MODE="$2" ;;
                 *)
                     echo "Error: invalid area mode '$2'. Must be one of: select, active, screen." >&2
+                    echo "Run '$(basename "$0") --help' for usage." >&2
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
+        -t|--text)
+            case "$2" in
+                text|html|markup) TEXT_FORMAT="$2" ;;
+                *)
+                    echo "Error: -t requires a format: text, html, or markup." >&2
                     echo "Run '$(basename "$0") --help' for usage." >&2
                     exit 1
                     ;;
@@ -200,7 +219,11 @@ log "Window title: $WINDOW_TITLE"
 ISO_DATE=$(date "$DATEFORMAT" | tr ':/<>\\|?* ' '-')
 CLEAN_NAME=$(echo "$WINDOW_TITLE" | tr -dc '[:alnum:]_\n\r ' | tr ' ' '_')
 
-if $DO_SAVE; then
+if [[ -n "$TEXT_FORMAT" ]]; then
+    # Always capture to a temp PNG; final text file determined after API call
+    TMPFILE=$(mktemp /tmp/screenshot_XXXXXX.png)
+    FILENAME="$TMPFILE"
+elif $DO_SAVE; then
     SUBFILENAME="screenshot_${ISO_DATE}_${CLEAN_NAME}.png"
     FILENAME="$SCREENSHOT_DIR/$SUBFILENAME"
     TMPFILE=""
@@ -217,9 +240,95 @@ trap '[[ -n "$TMPFILE" ]] && rm -f "$TMPFILE"' EXIT
 grim -g "$AREA" "$FILENAME" || err "grim failed to capture screenshot."
 log "Screenshot captured."
 
+
+# ─── Text extraction via Claude API ───────────────────────────────────────
+if [[ -n "$TEXT_FORMAT" ]]; then
+    [[ -z "$ANTHROPIC_API_KEY" ]] && err "ANTHROPIC_API_KEY is not set."
+
+    case "$TEXT_FORMAT" in
+        text)
+            TEXT_EXT="txt"
+            FORMAT_INSTRUCTION="Extract all text from this image as plain text, preserving layout and structure."
+            ;;
+        html)
+            TEXT_EXT="html"
+            FORMAT_INSTRUCTION="Convert the content of this image to well-formed HTML. Use semantic tags. Do not include <html>/<head>/<body> wrappers — output a fragment only."
+            ;;
+        markup)
+            TEXT_EXT="md"
+            FORMAT_INSTRUCTION="Convert the content of this image to Markdown. Preserve headings, lists, code blocks, tables, and emphasis where appropriate."
+            ;;
+    esac
+
+    log "Encoding image and calling Claude API (format: $TEXT_FORMAT)..."
+    IMAGE_B64=$(base64 -w 0 "$FILENAME")
+
+    API_RESPONSE=$(jq -n \
+        --arg b64 "$IMAGE_B64" \
+        --arg instruction "$FORMAT_INSTRUCTION" \
+        '{
+            model: "claude-sonnet-4-6",
+            max_tokens: 4096,
+            messages: [{
+                role: "user",
+                content: [
+                    {
+                        type: "image",
+                        source: { type: "base64", media_type: "image/png", data: $b64 }
+                    },
+                    {
+                        type: "text",
+                        text: ("Respond with raw JSON only — no markdown, no code fences, no explanation. The JSON object must have exactly two fields: \"name\" (a concise snake_case identifier, max 30 chars, derived from the content — e.g. meeting_notes, error_log, code_snippet) and \"text\" (the converted content). " + $instruction)
+                    }
+                ]
+            }]
+        }' \
+        | curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d @-)
+
+    CLAUDE_JSON=$(echo "$API_RESPONSE" | jq -r '.content[0].text' | sed '/^```/d')
+    DERIVED_NAME=$(echo "$CLAUDE_JSON" | jq -r '.name' | tr -dc '[:alnum:]_' | cut -c1-30)
+    TEXT_CONTENT=$(echo "$CLAUDE_JSON" | jq -r '.text')
+
+    [[ -z "$DERIVED_NAME" || "$DERIVED_NAME" == "null" ]] && err "Claude did not return a valid name. API response: $API_RESPONSE"
+    [[ -z "$TEXT_CONTENT" || "$TEXT_CONTENT" == "null" ]] && err "Claude did not return text content. API response: $API_RESPONSE"
+
+    log "Derived name: $DERIVED_NAME"
+
+    if $DO_SAVE; then
+        SUBFILENAME="screenshot_data_${ISO_DATE}_${DERIVED_NAME}.${TEXT_EXT}"
+        TEXT_FILE="$SCREENSHOT_DIR/$SUBFILENAME"
+        printf '%s' "$TEXT_CONTENT" > "$TEXT_FILE" || err "Failed to write text file."
+        log "Text saved to: $TEXT_FILE"
+    fi
+
+    if $DO_COPY; then
+        printf '%s' "$TEXT_CONTENT" | wl-copy
+        log "Text copied to clipboard."
+    fi
+
+    if $NOTIFY; then
+        if $DO_SAVE; then
+            MESSAGE="Converted to ${TEXT_FORMAT} & saved to:"
+            $DO_COPY && MESSAGE="Converted to ${TEXT_FORMAT}, copied & saved to:"
+            ACTION_RESULT=$(notify-send "$MESSAGE" "${SUBFILENAME:0:48}" \
+                --hint=int:transient:1 \
+                --action="default=Open Folder")
+            [ "$ACTION_RESULT" = "default" ] && setsid "$FILE_EXPLORER" "$SCREENSHOT_DIR" > /dev/null 2>&1 &
+        else
+            notify-send "Converted to ${TEXT_FORMAT} & copied" --hint=int:transient:1
+        fi
+    fi
+
+    exit 0
+fi
+
 # ─── Copy to clipboard ─────────────────────────────────────────────────────
 if $DO_COPY; then
-    cat "$FILENAME" | wl-copy
+    wl-copy < "$FILENAME"
     log "Copied to clipboard."
 fi
 
