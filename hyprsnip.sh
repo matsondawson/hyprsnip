@@ -261,10 +261,12 @@ if [[ -n "$TEXT_FORMAT" ]]; then
     esac
 
     log "Encoding image and calling Claude API (format: $TEXT_FORMAT)..."
-    IMAGE_B64=$(base64 -w 0 "$FILENAME")
+    B64_TMPFILE=$(mktemp /tmp/hyprsnip_b64_XXXXXX)
+    trap '[[ -n "$TMPFILE" ]] && rm -f "$TMPFILE"; [[ -n "$B64_TMPFILE" ]] && rm -f "$B64_TMPFILE"' EXIT
+    base64 -w 0 "$FILENAME" > "$B64_TMPFILE"
 
     API_RESPONSE=$(jq -n \
-        --arg b64 "$IMAGE_B64" \
+        --rawfile b64 "$B64_TMPFILE" \
         --arg instruction "$FORMAT_INSTRUCTION" \
         '{
             model: "claude-sonnet-4-6",
@@ -274,7 +276,7 @@ if [[ -n "$TEXT_FORMAT" ]]; then
                 content: [
                     {
                         type: "image",
-                        source: { type: "base64", media_type: "image/png", data: $b64 }
+                        source: { type: "base64", media_type: "image/png", data: ($b64 | rtrimstr("\n")) }
                     },
                     {
                         type: "text",
