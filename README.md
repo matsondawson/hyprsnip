@@ -121,12 +121,12 @@ hyprsnip copysave --text markup  # convert notes/docs to Markdown, save + copy
 
 ### Hyprland keybind
 
-Add to `~/.config/hypr/hyprland.conf`:
+If using ml4w add keybindings to `~/.config/hypr/conf/keybindings/custom.lua`:
 
 ```ini
-bind = , PRINT, exec, ~/.local/bin/hyprsnip copysave                           # Copy area to clipboard and also save to screen shots
-bind = $mainMod, PRINT, exec, ~/.local/bin/hyprsnip copysave -a active         # Copy active window to clipboard and also save to screen shots
-bind = $mainMod SHIFT, PRINT, exec, ~/.local/bin/hyprsnip copysave -a screen   # Copy active workspace to clipboard and also save to screen shots
+hl.bind("PRINT", hl.dsp.exec_cmd("~/.local/bin/hyprsnip copysave"), { description = "Copy area to clipboard and also save to screenshots" })
+hl.bind("SUPER + PRINT", hl.dsp.exec_cmd("~/.local/bin/hyprsnip copysave -a active"), { description = "Copy active window to clipboard and also save to screenshots" })
+hl.bind("SUPER + SHIFT + PRINT", hl.dsp.exec_cmd("~/.local/bin/hyprsnip copysave -a screen"), { description = "Copy active workspace to clipboard and also save to screenshots" })
 ```
 
 ## How It Works
