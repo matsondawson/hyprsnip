@@ -33,7 +33,7 @@ Install on Arch-based systems:
 If you already have [ml4w](https://github.com/mylinuxforwork/dotfiles) installed you won't need to install these.
 
 ```bash
-sudo pacman -S slurp grim wl-clipboard jq libnotify nautilus
+sudo pacman -S slurp grim wl-clipboard jq libnotify nautilus curl
 ```
 
 ## Installation
@@ -119,11 +119,18 @@ hyprsnip save --text html      # convert a webpage screenshot to HTML
 hyprsnip copysave --text markup  # convert notes/docs to Markdown, save + copy
 ```
 
+### Privacy
+
+- `--text` mode uploads the screenshot to the Anthropic API. Avoid it for captures containing passwords, keys, or other sensitive content.
+- The API key is passed to `curl` through a file descriptor, so it never appears in the process list.
+- Screenshots and text files are created with owner-only permissions (`umask 077`).
+- If you run a clipboard manager (e.g. `cliphist`), copied screenshots and text are kept in its history.
+
 ### Hyprland keybind
 
 If using ml4w add keybindings to `~/.config/hypr/conf/keybindings/custom.lua`:
 
-```ini
+```lua
 hl.bind("PRINT", hl.dsp.exec_cmd("~/.local/bin/hyprsnip copysave"), { description = "Copy area to clipboard and also save to screenshots" })
 hl.bind("SUPER + PRINT", hl.dsp.exec_cmd("~/.local/bin/hyprsnip copysave -a active"), { description = "Copy active window to clipboard and also save to screenshots" })
 hl.bind("SUPER + SHIFT + PRINT", hl.dsp.exec_cmd("~/.local/bin/hyprsnip copysave -a screen"), { description = "Copy active workspace to clipboard and also save to screenshots" })
@@ -131,11 +138,11 @@ hl.bind("SUPER + SHIFT + PRINT", hl.dsp.exec_cmd("~/.local/bin/hyprsnip copysave
 
 ## How It Works
 
-1. The capture area is determined by `--area`: `select` (default) opens a `slurp` crosshair to drag a region; `active` captures the focused window's geometry via `hyprctl activewindow`; `screen` captures the entire focused monitor via `hyprctl monitors`.
+1. The capture area is determined by `--area`: `select` (default) opens a `slurp` crosshair to drag a region; `active` captures the focused window's geometry via `hyprctl activewindow`; `screen` captures the entire focused monitor (by output name, so scaled monitors work) via `hyprctl monitors`.
 2. `hyprctl activeworkspace` gets the current workspace ID.
 3. `hyprctl clients` is queried to find the window whose bounding box contains the centre point of the selection. Its title becomes part of the filename.
-4. `grim` captures the selected region.
-5. If `--text FORMAT` is set, the PNG is base64-encoded and sent to the Claude API with a format-specific instruction. Claude converts the content to plain text, HTML, or Markdown and derives a short descriptive name. The result is saved as `screenshot_data_{date}_{name}.{ext}` and/or copied to clipboard.
+4. `grim` captures the selected region (or monitor).
+5. If `--text FORMAT` is set, the PNG is base64-encoded and sent to the Claude API (`claude-sonnet-5-5`) with a format-specific instruction and a JSON schema for the response. Claude converts the content to plain text, HTML, or Markdown and derives a short descriptive name. The result is saved as `screenshot_data_{date}_{name}.{ext}` and/or copied to clipboard.
 6. Otherwise, the image is copied to clipboard via `wl-copy` and/or saved to disk.
 7. A `notify-send` notification appears. If the output was saved, clicking the notification opens the screenshots folder in your configured file manager.
 
