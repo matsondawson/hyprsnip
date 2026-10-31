@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Keep screenshots, text output and temp files private to the current user
+umask 077
+
 # ─── Defaults ────────────────────────────────────────────────────────────────
 FILE_EXPLORER="nautilus"
 SCREENSHOT_DIR="$HOME/Pictures/screenshots"
@@ -47,6 +50,8 @@ Examples:
   $(basename "$0") save --no-notify
   $(basename "$0") copysave --area active
   $(basename "$0") copysave --area screen
+  $(basename "$0") copy --text text
+  $(basename "$0") save --text markup
 EOF
 }
 
@@ -166,15 +171,17 @@ case "$AREA_MODE" in
         log "Capturing active window..."
         WINDOW_JSON=$(hyprctl activewindow -j)
         WINDOW_TITLE=$(echo "$WINDOW_JSON" | jq -r '.title')
-        AREA=$(echo "$WINDOW_JSON" | jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')
-        [ -z "$AREA" ] && err "Could not determine active window geometry."
+        AREA=$(echo "$WINDOW_JSON" | jq -r 'if .at and .size then "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" else empty end')
+        [ -z "$AREA" ] && err "No active window to capture."
         log "Active window area: $AREA"
         ;;
     screen)
         log "Capturing active workspace..."
-        AREA=$(hyprctl monitors -j | jq -r '.[] | select(.focused == true) | "\(.x),\(.y) \(.width)x\(.height)"')
-        [ -z "$AREA" ] && err "Could not determine active monitor geometry."
-        log "Active monitor area: $AREA"
+        # Capture by output name: hyprctl reports physical pixels, but grim -g
+        # expects logical coordinates, which differ on scaled monitors.
+        MONITOR=$(hyprctl monitors -j | jq -r '.[] | select(.focused == true) | .name')
+        [ -z "$MONITOR" ] && err "Could not determine active monitor."
+        log "Active monitor: $MONITOR"
         WORKSPACE_WINDOWS=$(hyprctl clients -j | jq -r "[.[] | select(.workspace.id == $WS_ID and .hidden == false and .mapped == true)]")
         WINDOW_COUNT=$(echo "$WORKSPACE_WINDOWS" | jq 'length')
         if [[ "$WINDOW_COUNT" -eq 1 ]]; then
@@ -237,7 +244,12 @@ log "Output file: $FILENAME"
 trap '[[ -n "$TMPFILE" ]] && rm -f "$TMPFILE"' EXIT
 
 # ─── Capture ───────────────────────────────────────────────────────────────
-grim -g "$AREA" "$FILENAME" || err "grim failed to capture screenshot."
+if [[ "$AREA_MODE" == "screen" ]]; then
+    GRIM_ARGS=(-o "$MONITOR")
+else
+    GRIM_ARGS=(-g "$AREA")
+fi
+grim "${GRIM_ARGS[@]}" "$FILENAME" || err "grim failed to capture screenshot."
 log "Screenshot captured."
 
 
@@ -269,8 +281,24 @@ if [[ -n "$TEXT_FORMAT" ]]; then
         --rawfile b64 "$B64_TMPFILE" \
         --arg instruction "$FORMAT_INSTRUCTION" \
         '{
-            model: "claude-sonnet-4-6",
-            max_tokens: 4096,
+            model: "claude-sonnet-5-5",
+            max_tokens: 16000,
+            fallbacks: "default",
+            output_config: {
+                effort: "low",
+                format: {
+                    type: "json_schema",
+                    schema: {
+                        type: "object",
+                        properties: {
+                            name: { type: "string" },
+                            text: { type: "string" }
+                        },
+                        required: ["name", "text"],
+                        additionalProperties: false
+                    }
+                }
+            },
             messages: [{
                 role: "user",
                 content: [
@@ -280,18 +308,29 @@ if [[ -n "$TEXT_FORMAT" ]]; then
                     },
                     {
                         type: "text",
-                        text: ("Respond with raw JSON only — no markdown, no code fences, no explanation. The JSON object must have exactly two fields: \"name\" (a concise snake_case identifier, max 30 chars, derived from the content — e.g. meeting_notes, error_log, code_snippet) and \"text\" (the converted content). " + $instruction)
+                        text: ("Set \"name\" to a concise snake_case identifier, max 30 chars, derived from the content (e.g. meeting_notes, error_log, code_snippet). Set \"text\" to the converted content. " + $instruction)
                     }
                 ]
             }]
         }' \
         | curl -s https://api.anthropic.com/v1/messages \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
+            -H @<(printf 'x-api-key: %s\n' "$ANTHROPIC_API_KEY") \
+            -H "anthropic-version: 2026-10-21" \
+            -H "anthropic-beta: server-side-fallback-2026-07-01" \
             -H "content-type: application/json" \
-            -d @-)
+            -d @-) || err "Failed to reach the Claude API."
 
-    CLAUDE_JSON=$(echo "$API_RESPONSE" | jq -r '.content[0].text' | sed '/^```/d')
+    API_ERROR=$(echo "$API_RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
+    [[ -n "$API_ERROR" ]] && err "Claude API error: $API_ERROR"
+
+    STOP_REASON=$(echo "$API_RESPONSE" | jq -r '.stop_reason // empty')
+    case "$STOP_REASON" in
+        refusal)    err "Claude declined to convert this screenshot." ;;
+        max_tokens) err "Output too long: Claude hit the max_tokens limit." ;;
+    esac
+
+    # Thinking blocks may precede the answer, so pick out the text blocks
+    CLAUDE_JSON=$(echo "$API_RESPONSE" | jq -r '[.content[]? | select(.type == "text") | .text] | join("")')
     DERIVED_NAME=$(echo "$CLAUDE_JSON" | jq -r '.name' | tr -dc '[:alnum:]_' | cut -c1-30)
     TEXT_CONTENT=$(echo "$CLAUDE_JSON" | jq -r '.text')
 
